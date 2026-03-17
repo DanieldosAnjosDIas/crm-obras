@@ -270,6 +270,1272 @@ async function saveExpense(projectId, expense) {
   showToast('Despesa registrada');
 }
 
+// ─── CLIENT ACTIONS ─────────────────────────
+async function convertLeadToClient(lead) {
+  const { data } = await db.from('clients').insert({
+    lead_id: lead.id, name: lead.name, phone: lead.phone, email: lead.email, address: lead.property_address
+  }).select().single();
+  await db.from('leads').update({ status: 'CONTRACT_SIGNED' }).eq('id', lead.id);
+  await loadAll();
+  showToast('Cliente criado a partir do lead!');
+  setState({ modal: null });
+  return data;
+}
+
+// ─── MODAL ────────────────────────────────────
+function openModal(name, data=null) {
+  setState({ modal: name, modalData: data });
+  if (name === 'quoteEditor' && data?.id) loadQuoteItems(data.id);
+  if (name === 'projectDetail' && data?.id) { loadProjectTasks(data.id); loadProjectExpenses(data.id); }
+}
+
+// ─── FORMAT HELPERS ──────────────────────────
+const fmt = n => n ? new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(n) : 'R$ 0,00';
+const fmtDate = d => d ? new Date(d+'T12:00:00').toLocaleDateString('pt-BR') : '-';
+const fmtDT = d => d ? new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '-';
+
+// ─── RENDER ──────────────────────────────────
+function render() {
+  document.getElementById('app').innerHTML = state.user ? renderApp() : renderAuth();
+  attachEvents();
+}
+
+// ─── AUTH PAGE ───────────────────────────────
+function renderAuth() {
+  const isSignup = state.authMode === 'signup';
+  return `
+<div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#1A3C6E] to-[#1F6FBF] p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 fade-in">
+    <div class="text-center mb-8">
+      <div class="text-4xl mb-2">🏗️</div>
+      <h1 class="text-2xl font-bold text-[#1A3C6E]">CRM Obras</h1>
+      <p class="text-slate-500 text-sm mt-1">Dos Anjos Engenharia</p>
+    </div>
+    <div class="flex bg-slate-100 rounded-lg p-1 mb-6">
+      <button onclick="switchAuth('login')" class="flex-1 py-2 rounded-md text-sm font-medium transition ${!isSignup?'bg-white shadow text-[#1A3C6E]':'text-slate-500'}">Entrar</button>
+      <button onclick="switchAuth('signup')" class="flex-1 py-2 rounded-md text-sm font-medium transition ${isSignup?'bg-white shadow text-[#1A3C6E]':'text-slate-500'}">Cadastrar</button>
+    </div>
+    <form onsubmit="handleAuth(event)" class="space-y-4">
+      ${isSignup ? `<input name="name" placeholder="Seu nome completo" required class="w-full border border-slate-200 rounded-lg px-4 py-3 text-sm" />` : ''}
+      <input name="email" type="email" placeholder="seu@email.com" required class="w-full border border-slate-200 rounded-lg px-4 py-3 text-sm" />
+      <input name="password" type="password" placeholder="Senha" required class="w-full border border-slate-200 rounded-lg px-4 py-3 text-sm" />
+      <button type="submit" class="w-full bg-[#1A3C6E] text-white py-3 rounded-lg font-semibold hover:bg-[#1F6FBF] transition">
+        ${isSignup ? 'Criar conta' : 'Entrar'}
+      </button>
+    </form>
+    ${state.toast ? renderToast() : ''}
+  </div>
+</div>`;
+}
+
+// ─── MAIN APP ────────────────────────────────
+function renderApp() {
+  return `
+<div class="flex h-screen overflow-hidden">
+  ${renderSidebar()}
+  <main class="flex-1 overflow-y-auto bg-slate-50">
+    <div class="fade-in">
+      ${renderView()}
+    </div>
+  </main>
+</div>
+${state.modal ? renderModal() : ''}
+${state.toast ? `<div class="fixed bottom-4 right-4 z-50">${renderToast()}</div>` : ''}`;
+}
+
+function renderSidebar() {
+  const nav = [
+    { id:'dashboard', icon:'📊', label:'Dashboard' },
+    { id:'leads', icon:'🎯', label:'Leads' },
+    { id:'visits', icon:'📅', label:'Visitas' },
+    { id:'quotes', icon:'📋', label:'Orçamentos' },
+    { id:'projects', icon:'🏗️', label:'Obras' },
+    { id:'clients', icon:'👥', label:'Clientes' },
+  ];
+  return `
+<aside class="w-56 flex-shrink-0 bg-[#1A3C6E] text-white flex flex-col">
+  <div class="p-5 border-b border-white/10">
+    <h1 class="font-bold text-lg">🏗️ CRM Obras</h1>
+    <p class="text-xs text-blue-200 mt-0.5 truncate">${state.profile?.name || state.user?.email}</p>
+  </div>
+  <nav class="flex-1 p-3 space-y-0.5">
+    ${nav.map(n=>`
+      <button onclick="navigate('${n.id}')" class="sidebar-item w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 text-sm ${state.view===n.id?'active font-semibold':'text-blue-100'}">
+        <span>${n.icon}</span><span>${n.label}</span>
+      </button>`).join('')}
+  </nav>
+  <div class="p-3 border-t border-white/10">
+    <button onclick="handleSignOut()" class="sidebar-item w-full text-left px-3 py-2.5 rounded-lg text-sm text-blue-200 flex items-center gap-3">
+      <span>🚪</span><span>Sair</span>
+    </button>
+  </div>
+</aside>`;
+}
+
+function renderView() {
+  const views = { dashboard: renderDashboard, leads: renderLeads, visits: renderVisits, quotes: renderQuotes, projects: renderProjects, clients: renderClients };
+  return (views[state.view] || renderDashboard)();
+}
+
+// ─── HEADER ──────────────────────────────────
+function pageHeader(title, subtitle, btn='') {
+  return `<div class="bg-white border-b px-6 py-4 flex items-center justify-between">
+    <div><h2 class="text-xl font-bold text-slate-800">${title}</h2>${subtitle?`<p class="text-sm text-slate-500">${subtitle}</p>`:''}</div>
+    ${btn}
+  </div>`;
+}
+
+// ─── DASHBOARD ───────────────────────────────
+function renderDashboard() {
+  const activeLeads = state.leads.filter(l=>!['CONTRACT_SIGNED','LOST'].includes(l.status)).length;
+  const totalLeads = state.leads.length;
+  const converted = state.leads.filter(l=>l.status==='CONTRACT_SIGNED').length;
+  const convRate = totalLeads ? Math.round(converted/totalLeads*100) : 0;
+  const activeProjects = state.projects.filter(p=>p.status==='IN_PROGRESS').length;
+  const revenue = state.projects.reduce((s,p)=>s+(p.budget_approved||0),0);
+  const pendingVisits = state.visits.filter(v=>v.status==='SCHEDULED').length;
+  const kpis = [
+    { icon:'🎯', label:'Leads Ativos', value: activeLeads, sub:`${totalLeads} total`, color:'bg-blue-50 text-blue-700' },
+    { icon:'📈', label:'Conversão', value: convRate+'%', sub:`${converted} contratos`, color:'bg-green-50 text-green-700' },
+    { icon:'🏗️', label:'Obras em Andamento', value: activeProjects, sub:`${state.projects.length} total`, color:'bg-orange-50 text-orange-700' },
+    { icon:'💰', label:'Volume Contratado', value: fmt(revenue), sub:'Soma dos contratos', color:'bg-purple-50 text-purple-700' },
+    { icon:'📅', label:'Visitas Pendentes', value: pendingVisits, sub:'Agendadas', color:'bg-yellow-50 text-yellow-700' },
+    { icon:'📋', label:'Orçamentos', value: state.quotes.length, sub:`${state.quotes.filter(q=>q.status==='DRAFT').length} em rascunho`, color:'bg-slate-50 text-slate-700' },
+  ];
+
+  // Pipeline counts
+  const stageCounts = {};
+  LEAD_STAGES.forEach(s => stageCounts[s.key] = state.leads.filter(l=>l.status===s.key).length);
+
+  // Recent leads
+  const recentLeads = state.leads.slice(0,5);
+
+  return `
+<div>
+  ${pageHeader('Dashboard','Visão geral da empresa')}
+  <div class="p-6 space-y-6">
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+      ${kpis.map(k=>`
+        <div class="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="text-2xl">${k.icon}</span>
+            <span class="text-xs text-slate-500 font-medium uppercase tracking-wide">${k.label}</span>
+          </div>
+          <div class="text-2xl font-bold text-slate-800">${k.value}</div>
+          <div class="text-xs text-slate-400 mt-1">${k.sub}</div>
+        </div>`).join('')}
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
+        <h3 class="font-semibold text-slate-700 mb-4">Pipeline de Leads</h3>
+        <div class="space-y-2">
+          ${LEAD_STAGES.map(s=>`
+            <div class="flex items-center gap-3">
+              <div class="w-3 h-3 rounded-full ${s.dot} flex-shrink-0"></div>
+              <span class="text-sm text-slate-600 flex-1">${s.label}</span>
+              <span class="text-sm font-bold text-slate-800">${stageCounts[s.key]||0}</span>
+              <div class="w-24 bg-slate-100 rounded-full h-1.5">
+                <div class="bg-[#1A3C6E] h-1.5 rounded-full" style="width:${totalLeads?Math.round((stageCounts[s.key]||0)/totalLeads*100):0}%"></div>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
+        <h3 class="font-semibold text-slate-700 mb-4">Leads Recentes</h3>
+        ${recentLeads.length ? `<div class="space-y-3">
+          ${recentLeads.map(l=>{
+            const stage = LEAD_STAGES.find(s=>s.key===l.status);
+            return `<div class="flex items-center gap-3 cursor-pointer hover:bg-slate-50 p-2 rounded-lg" onclick="openModal('leadDetail','${l.id}')">
+              <div class="w-8 h-8 rounded-full bg-[#1A3C6E] text-white flex items-center justify-center text-xs font-bold flex-shrink-0">${l.name[0].toUpperCase()}</div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium text-slate-800 truncate">${l.name}</div>
+                <div class="text-xs text-slate-400">${l.work_type||'Sem tipo'} · ${SOURCE_LABELS[l.source]||l.source}</div>
+              </div>
+              <span class="text-xs px-2 py-0.5 rounded-full ${stage?.color||'bg-slate-100'} whitespace-nowrap">${stage?.label||l.status}</span>
+            </div>`;
+          }).join('')}
+        </div>` : `<p class="text-slate-400 text-sm text-center py-8">Nenhum lead ainda.<br/><button onclick="navigate('leads')" class="text-blue-500 hover:underline">Adicionar primeiro lead</button></p>`}
+      </div>
+    </div>
+
+    ${state.projects.length ? `
+    <div class="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
+      <h3 class="font-semibold text-slate-700 mb-4">Obras em Andamento</h3>
+      <div class="space-y-3">
+        ${state.projects.filter(p=>p.status==='IN_PROGRESS').slice(0,5).map(p=>`
+          <div class="flex items-center gap-4 cursor-pointer hover:bg-slate-50 p-2 rounded-lg" onclick="openModalProject('${p.id}')">
+            <div class="flex-1">
+              <div class="text-sm font-medium text-slate-800">${p.name}</div>
+              <div class="text-xs text-slate-400">${p.code} · ${p.address||'Sem endereço'}</div>
+            </div>
+            <div class="w-32">
+              <div class="flex justify-between text-xs text-slate-500 mb-1">
+                <span>Progresso</span><span>${p.progress_pct||0}%</span>
+              </div>
+              <div class="bg-slate-100 rounded-full h-2">
+                <div class="bg-green-500 h-2 rounded-full" style="width:${p.progress_pct||0}%"></div>
+              </div>
+            </div>
+            <div class="text-right">
+              <div class="text-sm font-bold text-slate-800">${fmt(p.budget_approved)}</div>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+  </div>
+</div>`;
+}
+
+// ─── LEADS ───────────────────────────────────
+function renderLeads() {
+  const viewMode = state.leadsViewMode || 'kanban';
+  return `
+<div>
+  ${pageHeader('Leads','Gerencie seu pipeline de vendas',`
+    <div class="flex items-center gap-2">
+      <button onclick="setState({leadsViewMode:'kanban'})" class="px-3 py-1.5 text-sm rounded-lg ${viewMode==='kanban'?'bg-[#1A3C6E] text-white':'bg-slate-100 text-slate-600'}">Kanban</button>
+      <button onclick="setState({leadsViewMode:'list'})" class="px-3 py-1.5 text-sm rounded-lg ${viewMode==='list'?'bg-[#1A3C6E] text-white':'bg-slate-100 text-slate-600'}">Lista</button>
+      <button onclick="openModal('leadForm',null)" class="bg-[#1A3C6E] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1F6FBF] transition">+ Novo Lead</button>
+    </div>`)}
+  ${viewMode === 'kanban' ? renderLeadKanban() : renderLeadList()}
+</div>`;
+}
+
+function renderLeadKanban() {
+  return `
+<div class="overflow-x-auto">
+  <div class="flex gap-3 p-4" style="min-width:max-content">
+    ${LEAD_STAGES.map(stage=>{
+      const stageLeads = state.leads.filter(l=>l.status===stage.key);
+      return `
+        <div class="kanban-col w-64 bg-white rounded-xl shadow-sm border border-slate-100" ondragover="event.preventDefault()" ondrop="handleDrop(event,'${stage.key}')">
+          <div class="p-3 border-b border-slate-100 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="w-2.5 h-2.5 rounded-full ${stage.dot}"></div>
+              <span class="text-xs font-semibold text-slate-700">${stage.label}</span>
+            </div>
+            <span class="bg-slate-100 text-slate-600 text-xs rounded-full px-2 py-0.5">${stageLeads.length}</span>
+          </div>
+          <div class="p-2 space-y-2 min-h-[200px]">
+            ${stageLeads.map(lead=>`
+              <div class="card-drag bg-slate-50 hover:bg-white border border-slate-200 rounded-lg p-3 cursor-pointer shadow-sm hover:shadow transition"
+                   draggable="true" ondragstart="handleDragStart(event,'${lead.id}')"
+                   onclick="openModal('leadDetail','${lead.id}')">
+                <div class="font-medium text-sm text-slate-800 truncate">${lead.name}</div>
+                ${lead.work_type?`<div class="text-xs text-slate-500 mt-0.5 truncate">${lead.work_type}</div>`:''}
+                <div class="flex items-center justify-between mt-2">
+                  <span class="text-xs text-slate-400">${SOURCE_LABELS[lead.source]||lead.source}</span>
+                  ${lead.budget_estimate?`<span class="text-xs font-medium text-green-600">${fmt(lead.budget_estimate)}</span>`:''}
+                </div>
+              </div>`).join('')}
+            <button onclick="openModal('leadForm',{status:'${stage.key}'})" class="w-full text-xs text-slate-400 py-2 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition">+ Adicionar</button>
+          </div>
+        </div>`;
+    }).join('')}
+  </div>
+</div>`;
+}
+
+function renderLeadList() {
+  return `
+<div class="p-4">
+  <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-100">
+        <tr>${['Nome','Tipo de Obra','Origem','Status','Estimativa','Data'].map(h=>`<th class="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">${h}</th>`).join('')}<th></th></tr>
+      </thead>
+      <tbody class="divide-y divide-slate-50">
+        ${state.leads.map(l=>{
+          const stage = LEAD_STAGES.find(s=>s.key===l.status);
+          return `<tr class="hover:bg-slate-50 cursor-pointer" onclick="openModal('leadDetail','${l.id}')">
+            <td class="px-4 py-3 font-medium text-slate-800">${l.name}</td>
+            <td class="px-4 py-3 text-slate-600">${l.work_type||'-'}</td>
+            <td class="px-4 py-3 text-slate-500">${SOURCE_LABELS[l.source]||l.source}</td>
+            <td class="px-4 py-3"><span class="px-2 py-1 rounded-full text-xs ${stage?.color||'bg-slate-100'}">${stage?.label||l.status}</span></td>
+            <td class="px-4 py-3 text-green-600 font-medium">${l.budget_estimate?fmt(l.budget_estimate):'-'}</td>
+            <td class="px-4 py-3 text-slate-400">${fmtDate(l.created_at?.split('T')[0])}</td>
+            <td class="px-4 py-3"><button onclick="event.stopPropagation();openModal('leadForm',${JSON.stringify(l).replace(/"/g,'&quot;')})" class="text-blue-500 hover:underline text-xs">Editar</button></td>
+          </tr>`;
+        }).join('')}
+        ${state.leads.length===0?`<tr><td colspan="7" class="px-4 py-12 text-center text-slate-400">Nenhum lead cadastrado. <button onclick="openModal('leadForm',null)" class="text-blue-500 hover:underline">Adicionar primeiro lead</button></td></tr>`:''}
+      </tbody>
+    </table>
+  </div>
+</div>`;
+}
+
+// ─── VISITS ──────────────────────────────────
+function renderVisits() {
+  const upcoming = state.visits.filter(v=>v.status==='SCHEDULED').sort((a,b)=>new Date(a.scheduled_at)-new Date(b.scheduled_at));
+  const done = state.visits.filter(v=>v.status==='DONE').sort((a,b)=>new Date(b.scheduled_at)-new Date(a.scheduled_at));
+  return `
+<div>
+  ${pageHeader('Agenda de Visitas','Visitas técnicas agendadas e realizadas',`
+    <button onclick="openModal('visitForm',null)" class="bg-[#1A3C6E] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1F6FBF] transition">+ Agendar Visita</button>`)}
+  <div class="p-4 space-y-4">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-yellow-400"></div>
+        <h3 class="font-semibold text-slate-700 text-sm">Próximas Visitas (${upcoming.length})</h3>
+      </div>
+      ${upcoming.length ? `
+      <div class="divide-y divide-slate-50">
+        ${upcoming.map(v=>{
+          const lead = state.leads.find(l=>l.id===v.lead_id);
+          return `<div class="px-4 py-4 flex items-center gap-4">
+            <div class="bg-[#1A3C6E] text-white rounded-xl p-3 text-center min-w-[56px] flex-shrink-0">
+              <div class="text-xl font-bold leading-none">${new Date(v.scheduled_at).getDate()}</div>
+              <div class="text-xs opacity-80">${new Date(v.scheduled_at).toLocaleDateString('pt-BR',{month:'short'})}</div>
+            </div>
+            <div class="flex-1">
+              <div class="font-medium text-slate-800">${lead?.name||'Lead removido'}</div>
+              <div class="text-sm text-slate-500">${lead?.work_type||''} · ${lead?.property_address||''}</div>
+              <div class="text-xs text-slate-400 mt-1">🕐 ${new Date(v.scheduled_at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</div>
+            </div>
+            ${v.observations?`<div class="text-xs text-slate-400 max-w-[200px] truncate">${v.observations}</div>`:''}
+            <div class="flex gap-2">
+              <button onclick="completeVisit('${v.id}')" class="bg-green-100 text-green-700 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-green-200 transition">✓ Concluir</button>
+              <button onclick="openModal('visitForm',${JSON.stringify(v).replace(/"/g,'&quot;')})" class="bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg text-xs hover:bg-slate-200 transition">Editar</button>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>` : `<p class="text-slate-400 text-sm text-center py-8">Nenhuma visita agendada</p>`}
+    </div>
+
+    ${done.length ? `
+    <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-green-400"></div>
+        <h3 class="font-semibold text-slate-700 text-sm">Realizadas (${done.length})</h3>
+      </div>
+      <div class="divide-y divide-slate-50">
+        ${done.slice(0,10).map(v=>{
+          const lead = state.leads.find(l=>l.id===v.lead_id);
+          return `<div class="px-4 py-3 flex items-center gap-3 opacity-70">
+            <span class="text-green-500 text-lg">✓</span>
+            <div class="flex-1">
+              <div class="text-sm font-medium text-slate-700">${lead?.name||'Lead removido'}</div>
+              <div class="text-xs text-slate-400">${fmtDT(v.scheduled_at)}</div>
+            </div>
+            ${v.observations?`<div class="text-xs text-slate-400 max-w-[200px] truncate">${v.observations}</div>`:''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+  </div>
+</div>`;
+}
+
+// ─── QUOTES ──────────────────────────────────
+function renderQuotes() {
+  const statusColors = { DRAFT:'bg-slate-100 text-slate-600', SENT:'bg-blue-100 text-blue-600', APPROVED:'bg-green-100 text-green-600', REJECTED:'bg-red-100 text-red-600' };
+  const statusLabels = { DRAFT:'Rascunho', SENT:'Enviado', APPROVED:'Aprovado', REJECTED:'Rejeitado' };
+  return `
+<div>
+  ${pageHeader('Orçamentos','Crie e gerencie orçamentos e propostas',`
+    <button onclick="openModal('quoteForm',null)" class="bg-[#1A3C6E] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1F6FBF] transition">+ Novo Orçamento</button>`)}
+  <div class="p-4">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 border-b border-slate-100">
+          <tr>${['Número','Título','Status','Margem','Válido até','Ações'].map(h=>`<th class="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">${h}</th>`).join('')}</tr>
+        </thead>
+        <tbody class="divide-y divide-slate-50">
+          ${state.quotes.map(q=>`
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-3 font-mono text-xs text-slate-600">${q.number}</td>
+              <td class="px-4 py-3 font-medium text-slate-800">${q.title||'Sem título'}</td>
+              <td class="px-4 py-3"><span class="px-2 py-1 rounded-full text-xs ${statusColors[q.status]||'bg-slate-100'}">${statusLabels[q.status]||q.status}</span></td>
+              <td class="px-4 py-3 text-slate-600">${q.overhead_pct||0}% BDI + ${q.profit_margin||0}% lucro</td>
+              <td class="px-4 py-3 text-slate-400">${q.valid_until?fmtDate(q.valid_until):'-'}</td>
+              <td class="px-4 py-3">
+                <button onclick="openModal('quoteEditor',${JSON.stringify(q).replace(/"/g,'&quot;')})" class="text-blue-500 hover:underline text-xs mr-3">Abrir Editor</button>
+              </td>
+            </tr>`).join('')}
+          ${state.quotes.length===0?`<tr><td colspan="6" class="px-4 py-12 text-center text-slate-400">Nenhum orçamento. <button onclick="openModal('quoteForm',null)" class="text-blue-500 hover:underline">Criar primeiro orçamento</button></td></tr>`:''}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>`;
+}
+
+// ─── PROJECTS ────────────────────────────────
+function renderProjects() {
+  const statusColors = { PLANNING:'bg-slate-100 text-slate-600', IN_PROGRESS:'bg-blue-100 text-blue-600', PAUSED:'bg-yellow-100 text-yellow-600', COMPLETED:'bg-green-100 text-green-600', CANCELLED:'bg-red-100 text-red-600' };
+  const statusLabels = { PLANNING:'Planejamento', IN_PROGRESS:'Em Andamento', PAUSED:'Pausado', COMPLETED:'Concluído', CANCELLED:'Cancelado' };
+  return `
+<div>
+  ${pageHeader('Obras','Acompanhe a execução dos projetos',`
+    <button onclick="openModal('projectForm',null)" class="bg-[#1A3C6E] text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-[#1F6FBF] transition">+ Nova Obra</button>`)}
+  <div class="p-4 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+    ${state.projects.map(p=>{
+      const cl = state.clients.find(c=>c.id===p.client_id);
+      return `
+      <div class="bg-white rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition cursor-pointer" onclick="openModalProject('${p.id}')">
+        <div class="p-4">
+          <div class="flex items-start justify-between mb-3">
+            <div>
+              <div class="font-semibold text-slate-800">${p.name}</div>
+              <div class="text-xs text-slate-400 mt-0.5">${p.code}</div>
+            </div>
+            <span class="px-2 py-1 rounded-full text-xs ${statusColors[p.status]||'bg-slate-100'} whitespace-nowrap">${statusLabels[p.status]||p.status}</span>
+          </div>
+          ${cl?`<div class="text-xs text-slate-500 mb-2">👤 ${cl.name}</div>`:''}
+          ${p.address?`<div class="text-xs text-slate-400 mb-3 truncate">📍 ${p.address}</div>`:''}
+          <div class="space-y-2">
+            <div class="flex justify-between text-xs text-slate-500">
+              <span>Progresso</span><span class="font-medium">${p.progress_pct||0}%</span>
+            </div>
+            <div class="bg-slate-100 rounded-full h-2">
+              <div class="h-2 rounded-full ${p.status==='COMPLETED'?'bg-green-500':'bg-[#1A3C6E]'}" style="width:${p.progress_pct||0}%"></div>
+            </div>
+          </div>
+          ${p.budget_approved?`<div class="mt-3 text-sm font-bold text-slate-700">${fmt(p.budget_approved)}</div>`:''}
+          ${p.start_date?`<div class="text-xs text-slate-400 mt-1">Início: ${fmtDate(p.start_date)}</div>`:''}
+        </div>
+      </div>`;
+    }).join('')}
+    ${state.projects.length===0?`<div class="col-span-3 text-center py-16 text-slate-400">Nenhuma obra cadastrada. <button onclick="openModal('projectForm',null)" class="text-blue-500 hover:underline">Criar primeira obra</button></div>`:''}
+  </div>
+</div>`;
+}
+
+// ─── CLIENTS ─────────────────────────────────
+function renderClients() {
+  return `
+<div>
+  ${pageHeader('Clientes',`${state.clients.length} cliente(s) cadastrado(s)`)}
+  <div class="p-4">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 border-b border-slate-100">
+          <tr>${['Nome','Telefone','Email','Endereço','Obras'].map(h=>`<th class="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase">${h}</th>`).join('')}</tr>
+        </thead>
+        <tbody class="divide-y divide-slate-50">
+          ${state.clients.map(c=>{
+            const projCount = state.projects.filter(p=>p.client_id===c.id).length;
+            return `<tr class="hover:bg-slate-50">
+              <td class="px-4 py-3"><div class="flex items-center gap-2"><div class="w-7 h-7 rounded-full bg-[#1A3C6E] text-white flex items-center justify-center text-xs font-bold">${c.name[0].toUpperCase()}</div><span class="font-medium text-slate-800">${c.name}</span></div></td>
+              <td class="px-4 py-3 text-slate-600">${c.phone||'-'}</td>
+              <td class="px-4 py-3 text-slate-500">${c.email||'-'}</td>
+              <td class="px-4 py-3 text-slate-400 max-w-[200px] truncate">${c.address||'-'}</td>
+              <td class="px-4 py-3"><span class="bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full text-xs">${projCount} obra(s)</span></td>
+            </tr>`;
+          }).join('')}
+          ${state.clients.length===0?`<tr><td colspan="5" class="px-4 py-12 text-center text-slate-400">Nenhum cliente ainda. Feche contratos no pipeline de leads para adicionar clientes.</td></tr>`:''}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>`;
+}
+
+// ─── MODALS ──────────────────────────────────
+function renderModal() {
+  const modals = {
+    leadForm: renderLeadFormModal,
+    leadDetail: renderLeadDetailModal,
+    visitForm: renderVisitFormModal,
+    quoteForm: renderQuoteFormModal,
+    quoteEditor: renderQuoteEditorModal,
+    projectForm: renderProjectFormModal,
+    projectDetail: renderProjectDetailModal,
+    convertLead: renderConvertLeadModal,
+  };
+  const fn = modals[state.modal];
+  if (!fn) return '';
+  return `
+<div class="fixed inset-0 z-40 flex items-center justify-center modal-bg p-4" onclick="if(event.target===this)setState({modal:null})">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto fade-in" onclick="event.stopPropagation()">
+    ${fn()}
+  </div>
+</div>`;
+}
+
+function modalHeader(title, subtitle='') {
+  return `<div class="flex items-center justify-between p-5 border-b border-slate-100">
+    <div><h3 class="text-lg font-bold text-slate-800">${title}</h3>${subtitle?`<p class="text-sm text-slate-500">${subtitle}</p>`:''}</div>
+    <button onclick="setState({modal:null})" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition text-lg">×</button>
+  </div>`;
+}
+
+function inputField(label, name, type='text', value='', required=false, extra='') {
+  return `<div><label class="block text-xs font-medium text-slate-500 mb-1">${label}${required?'<span class="text-red-400">*</span>':''}</label>
+    <input name="${name}" type="${type}" value="${value||''}" ${required?'required':''} ${extra} class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-blue-300"/></div>`;
+}
+
+function selectField(label, name, options, value='') {
+  return `<div><label class="block text-xs font-medium text-slate-500 mb-1">${label}</label>
+    <select name="${name}" class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-blue-300">
+      ${options.map(o=>`<option value="${o.value}" ${value===o.value?'selected':''}>${o.label}</option>`).join('')}
+    </select></div>`;
+}
+
+function textareaField(label, name, value='') {
+  return `<div><label class="block text-xs font-medium text-slate-500 mb-1">${label}</label>
+    <textarea name="${name}" rows="3" class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-blue-300 resize-none">${value||''}</textarea></div>`;
+}
+
+function renderLeadFormModal() {
+  const d = state.modalData || {};
+  return `
+${modalHeader(d.id?'Editar Lead':'Novo Lead')}
+<form onsubmit="handleLeadForm(event)" class="p-5 space-y-4">
+  <div class="grid grid-cols-2 gap-4">
+    ${inputField('Nome completo *','name','text',d.name,true)}
+    ${inputField('Telefone','phone','tel',d.phone)}
+  </div>
+  <div class="grid grid-cols-2 gap-4">
+    ${inputField('E-mail','email','email',d.email)}
+    ${inputField('Tipo de obra','work_type','text',d.work_type)}
+  </div>
+  ${inputField('Endereço do imóvel','property_address','text',d.property_address)}
+  <div class="grid grid-cols-2 gap-4">
+    ${selectField('Origem do lead','source',[
+      {value:'WHATSAPP',label:'WhatsApp'},{value:'PHONE',label:'Telefone'},{value:'EMAIL',label:'E-mail'},
+      {value:'INSTAGRAM',label:'Instagram'},{value:'REFERRAL',label:'Indicação'},{value:'WEBSITE',label:'Site'},{value:'OTHER',label:'Outro'}
+    ],d.source||'WHATSAPP')}
+    ${selectField('Status','status',LEAD_STAGES.map(s=>({value:s.key,label:s.label})),d.status||'NEW')}
+  </div>
+  ${inputField('Estimativa do cliente (R$)','budget_estimate','number',d.budget_estimate,'','step="0.01" min="0"')}
+  ${textareaField('Observações','notes',d.notes)}
+  ${d.id?`<input type="hidden" name="id" value="${d.id}"/>`:''}
+  <div class="flex gap-3 pt-2">
+    <button type="submit" class="flex-1 bg-[#1A3C6E] text-white py-2.5 rounded-lg font-medium hover:bg-[#1F6FBF] transition">${d.id?'Salvar alterações':'Criar Lead'}</button>
+    ${d.id?`<button type="button" onclick="deleteLead('${d.id}')" class="px-4 py-2.5 rounded-lg text-red-500 hover:bg-red-50 text-sm">Excluir</button>`:''}
+  </div>
+</form>`;
+}
+
+function renderLeadDetailModal() {
+  const leadId = state.modalData;
+  const d = state.leads.find(l=>l.id===leadId);
+  if (!d) return modalHeader('Lead não encontrado');
+  const stage = LEAD_STAGES.find(s=>s.key===d.status);
+  const leadVisits = state.visits.filter(v=>v.lead_id===d.id);
+  const leadQuotes = state.quotes.filter(q=>q.lead_id===d.id);
+  return `
+${modalHeader(d.name, d.work_type||'')}
+<div class="p-5 space-y-4">
+  <div class="flex flex-wrap gap-2 mb-4">
+    <span class="px-3 py-1 rounded-full text-sm ${stage?.color||'bg-slate-100'}">${stage?.label||d.status}</span>
+    <span class="px-3 py-1 rounded-full text-sm bg-slate-100 text-slate-600">${SOURCE_LABELS[d.source]||d.source}</span>
+    ${d.budget_estimate?`<span class="px-3 py-1 rounded-full text-sm bg-green-50 text-green-700 font-medium">Est: ${fmt(d.budget_estimate)}</span>`:''}
+  </div>
+
+  <div class="grid grid-cols-2 gap-3 text-sm">
+    ${d.phone?`<div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400 mb-1">Telefone</div><div class="font-medium">${d.phone}</div></div>`:''}
+    ${d.email?`<div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400 mb-1">E-mail</div><div class="font-medium truncate">${d.email}</div></div>`:''}
+    ${d.property_address?`<div class="bg-slate-50 rounded-lg p-3 col-span-2"><div class="text-xs text-slate-400 mb-1">Endereço</div><div class="font-medium">${d.property_address}</div></div>`:''}
+  </div>
+
+  ${d.notes?`<div class="bg-yellow-50 border border-yellow-100 rounded-lg p-3 text-sm text-slate-700"><div class="text-xs font-medium text-yellow-600 mb-1">Observações</div>${d.notes}</div>`:''}
+
+  <div>
+    <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Mover para estágio</h4>
+    <div class="flex flex-wrap gap-2">
+      ${LEAD_STAGES.map(s=>`<button onclick="updateLeadStatus('${d.id}','${s.key}')" class="px-2.5 py-1 rounded-lg text-xs border transition ${d.status===s.key?'bg-[#1A3C6E] text-white border-[#1A3C6E]':'border-slate-200 text-slate-600 hover:border-[#1A3C6E] hover:text-[#1A3C6E]'}">${s.label}</button>`).join('')}
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 gap-3">
+    <div>
+      <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Visitas (${leadVisits.length})</h4>
+      ${leadVisits.map(v=>`<div class="text-xs bg-slate-50 rounded p-2 mb-1">${fmtDT(v.scheduled_at)} · <span class="${v.status==='DONE'?'text-green-600':'text-yellow-600'}">${v.status==='DONE'?'Realizada':'Agendada'}</span></div>`).join('')}
+      <button onclick="openModal('visitForm',{lead_id:'${d.id}'})" class="text-xs text-blue-500 hover:underline">+ Agendar visita</button>
+    </div>
+    <div>
+      <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Orçamentos (${leadQuotes.length})</h4>
+      ${leadQuotes.map(q=>`<div class="text-xs bg-slate-50 rounded p-2 mb-1">${q.number} · <span class="text-slate-500">${q.status}</span></div>`).join('')}
+      <button onclick="openModal('quoteForm',{lead_id:'${d.id}'})" class="text-xs text-blue-500 hover:underline">+ Novo orçamento</button>
+    </div>
+  </div>
+
+  <div class="flex gap-2 pt-2">
+    <button onclick="openModal('leadForm',${JSON.stringify(d).replace(/"/g,'&quot;')})" class="flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg text-sm hover:bg-slate-200 transition">Editar Lead</button>
+    ${d.status==='CONTRACT_SIGNED'?`<button onclick="openModal('convertLead',${JSON.stringify(d).replace(/"/g,'&quot;')})" class="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm hover:bg-green-700 transition">Criar Cliente</button>`:''}
+  </div>
+</div>`;
+}
+
+function renderVisitFormModal() {
+  const d = state.modalData || {};
+  const now = new Date();
+  now.setMinutes(0,0,0);
+  const defDate = now.toISOString().slice(0,16);
+  return `
+${modalHeader(d.id?'Editar Visita':'Agendar Visita Técnica')}
+<form onsubmit="handleVisitForm(event)" class="p-5 space-y-4">
+  ${selectField('Lead *','lead_id',
+    state.leads.filter(l=>!['CONTRACT_SIGNED','LOST'].includes(l.status)).map(l=>({value:l.id,label:l.name})),
+    d.lead_id||'')}
+  ${inputField('Data e hora *','scheduled_at','datetime-local',d.scheduled_at?d.scheduled_at.slice(0,16):defDate,true)}
+  ${d.id ? selectField('Status','status',[{value:'SCHEDULED',label:'Agendada'},{value:'DONE',label:'Realizada'},{value:'CANCELLED',label:'Cancelada'}],d.status) : ''}
+  ${textareaField('Observações / Descrição da obra','observations',d.observations)}
+  ${d.id?`<input type="hidden" name="id" value="${d.id}"/>`:''}
+  <div class="flex gap-3 pt-2">
+    <button type="submit" class="flex-1 bg-[#1A3C6E] text-white py-2.5 rounded-lg font-medium hover:bg-[#1F6FBF] transition">${d.id?'Salvar':'Agendar Visita'}</button>
+  </div>
+</form>`;
+}
+
+function renderQuoteFormModal() {
+  const d = state.modalData || {};
+  return `
+${modalHeader(d.id?'Editar Orçamento':'Novo Orçamento')}
+<form onsubmit="handleQuoteForm(event)" class="p-5 space-y-4">
+  ${selectField('Lead *','lead_id',state.leads.map(l=>({value:l.id,label:l.name})),d.lead_id||'')}
+  ${inputField('Título / Descrição','title','text',d.title)}
+  <div class="grid grid-cols-2 gap-4">
+    ${inputField('Validade','valid_until','date',d.valid_until)}
+    ${inputField('BDI / Overhead (%)','overhead_pct','number',d.overhead_pct||15,'','min="0" max="100" step="0.1"')}
+  </div>
+  ${inputField('Margem de Lucro (%)','profit_margin','number',d.profit_margin||20,'','min="0" max="100" step="0.1"')}
+  ${textareaField('Observações / Condições','notes',d.notes)}
+  ${d.id?`<input type="hidden" name="id" value="${d.id}"/>`:''}
+  <button type="submit" class="w-full bg-[#1A3C6E] text-white py-2.5 rounded-lg font-medium hover:bg-[#1F6FBF] transition">${d.id?'Salvar':'Criar e Abrir Editor'}</button>
+</form>`;
+}
+
+function renderQuoteEditorModal() {
+  const d = state.modalData || {};
+  const q = state.quotes.find(q=>q.id===d.id)||d;
+  const items = state.quoteItems[d.id] || [];
+  const totals = calcQuoteTotals(d.id);
+  const statusColors = { DRAFT:'bg-slate-100 text-slate-600', SENT:'bg-blue-100 text-blue-600', APPROVED:'bg-green-100 text-green-600', REJECTED:'bg-red-100 text-red-600' };
+  return `
+<div class="max-w-2xl">
+${modalHeader(`Orçamento ${q.number||''}`, q.title||'')}
+<div class="p-5 space-y-4">
+
+  <div class="grid grid-cols-3 gap-3">
+    <div class="bg-blue-50 rounded-lg p-3 text-center">
+      <div class="text-xs text-slate-500 mb-1">Materiais</div>
+      <div class="font-bold text-slate-800">${fmt(totals.materials)}</div>
+    </div>
+    <div class="bg-orange-50 rounded-lg p-3 text-center">
+      <div class="text-xs text-slate-500 mb-1">Mão de Obra</div>
+      <div class="font-bold text-slate-800">${fmt(totals.labor)}</div>
+    </div>
+    <div class="bg-green-50 rounded-lg p-3 text-center">
+      <div class="text-xs text-slate-500 mb-1">Total c/ Margens</div>
+      <div class="font-bold text-green-700 text-lg">${fmt(totals.total)}</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="flex items-center justify-between mb-2">
+      <h4 class="text-sm font-semibold text-slate-700">Itens do Orçamento</h4>
+      <button onclick="addQuoteItemRow('${d.id}')" class="text-xs bg-[#1A3C6E] text-white px-3 py-1.5 rounded-lg hover:bg-[#1F6FBF] transition">+ Adicionar Item</button>
+    </div>
+    <div class="border border-slate-200 rounded-xl overflow-hidden">
+      <table class="w-full text-xs">
+        <thead class="bg-slate-50">
+          <tr>
+            <th class="text-left px-3 py-2 font-medium text-slate-500">Descrição</th>
+            <th class="text-left px-2 py-2 font-medium text-slate-500 w-24">Categoria</th>
+            <th class="text-left px-2 py-2 font-medium text-slate-500 w-16">Qtde</th>
+            <th class="text-left px-2 py-2 font-medium text-slate-500 w-24">R$ Unit</th>
+            <th class="text-right px-2 py-2 font-medium text-slate-500 w-24">Total</th>
+            <th class="w-8"></th>
+          </tr>
+        </thead>
+        <tbody id="quote-items-body" class="divide-y divide-slate-100">
+          ${items.map(item=>`
+            <tr data-item-id="${item.id}">
+              <td class="px-3 py-1.5"><input value="${item.description||''}" onblur="updateQuoteItemField('${d.id}','${item.id}','description',this.value)" class="w-full border-0 bg-transparent text-slate-700 focus:ring-1 focus:ring-blue-300 rounded px-1 py-0.5"/></td>
+              <td class="px-2 py-1.5">
+                <select onchange="updateQuoteItemField('${d.id}','${item.id}','category',this.value)" class="w-full border-0 bg-transparent text-slate-600 text-xs">
+                  <option ${item.category==='MATERIAL'?'selected':''}>MATERIAL</option>
+                  <option value="LABOR" ${item.category==='LABOR'?'selected':''}>MÃO DE OBRA</option>
+                  <option value="SERVICE" ${item.category==='SERVICE'?'selected':''}>SERVIÇO</option>
+                </select>
+              </td>
+              <td class="px-2 py-1.5"><input type="number" value="${item.quantity||1}" onblur="updateQuoteItemField('${d.id}','${item.id}','quantity',parseFloat(this.value)||1)" class="w-full border-0 bg-transparent text-slate-700 focus:ring-1 focus:ring-blue-300 rounded px-1" min="0" step="0.001"/></td>
+              <td class="px-2 py-1.5"><input type="number" value="${item.unit_price||0}" onblur="updateQuoteItemField('${d.id}','${item.id}','unit_price',parseFloat(this.value)||0)" class="w-full border-0 bg-transparent text-slate-700 focus:ring-1 focus:ring-blue-300 rounded px-1" min="0" step="0.01"/></td>
+              <td class="px-2 py-1.5 text-right font-medium text-slate-700">${fmt((item.quantity||1)*(item.unit_price||0))}</td>
+              <td class="px-2 py-1.5"><button onclick="deleteQuoteItem('${d.id}','${item.id}')" class="text-red-300 hover:text-red-500 transition">×</button></td>
+            </tr>`).join('')}
+          ${items.length===0?`<tr><td colspan="6" class="px-3 py-6 text-center text-slate-400">Nenhum item ainda. Clique em "Adicionar Item".</td></tr>`:''}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="bg-slate-50 rounded-lg p-3 text-sm space-y-1">
+    <div class="flex justify-between text-slate-600"><span>Subtotal</span><span>${fmt(totals.subtotal)}</span></div>
+    <div class="flex justify-between text-slate-500"><span>BDI / Overhead (${q.overhead_pct||0}%)</span><span>${fmt(totals.subtotal*(q.overhead_pct||0)/100)}</span></div>
+    <div class="flex justify-between text-slate-500"><span>Margem de Lucro (${q.profit_margin||0}%)</span><span>${fmt(totals.subtotal*(q.profit_margin||0)/100)}</span></div>
+    <div class="flex justify-between font-bold text-slate-800 text-base pt-1 border-t border-slate-200"><span>TOTAL</span><span class="text-green-700">${fmt(totals.total)}</span></div>
+  </div>
+
+  <div class="flex gap-2">
+    <button onclick="markQuoteSent('${d.id}')" class="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm hover:bg-blue-700 transition">📤 Marcar como Enviado</button>
+    <button onclick="markQuoteApproved('${d.id}')" class="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm hover:bg-green-700 transition">✓ Aprovar</button>
+  </div>
+</div>
+</div>`;
+}
+
+function renderProjectFormModal() {
+  const d = state.modalData || {};
+  const statusOpts = [{value:'PLANNING',label:'Planejamento'},{value:'IN_PROGRESS',label:'Em Andamento'},{value:'PAUSED',label:'Pausado'},{value:'COMPLETED',label:'Concluído'},{value:'CANCELLED',label:'Cancelado'}];
+  return `
+${modalHeader(d.id?'Editar Obra':'Nova Obra')}
+<form onsubmit="handleProjectForm(event)" class="p-5 space-y-4">
+  <div class="grid grid-cols-2 gap-4">
+    ${inputField('Nome da obra *','name','text',d.name,true)}
+    ${inputField('Código','code','text',d.code)}
+  </div>
+  ${inputField('Endereço da obra','address','text',d.address)}
+  ${selectField('Cliente','client_id',[{value:'',label:'— Selecionar —'},...state.clients.map(c=>({value:c.id,label:c.name}))],d.client_id||'')}
+  <div class="grid grid-cols-2 gap-4">
+    ${selectField('Status','status',statusOpts,d.status||'PLANNING')}
+    ${inputField('Orçamento Aprovado (R$)','budget_approved','number',d.budget_approved,'','min="0" step="0.01"')}
+  </div>
+  <div class="grid grid-cols-2 gap-4">
+    ${inputField('Data de início','start_date','date',d.start_date)}
+    ${inputField('Previsão de término','end_date_planned','date',d.end_date_planned)}
+  </div>
+  ${inputField('Progresso (%)','progress_pct','number',d.progress_pct||0,'','min="0" max="100" step="1"')}
+  ${textareaField('Observações','notes',d.notes)}
+  ${d.id?`<input type="hidden" name="id" value="${d.id}"/>`:''}
+  <button type="submit" class="w-full bg-[#1A3C6E] text-white py-2.5 rounded-lg font-medium hover:bg-[#1F6FBF] transition">${d.id?'Salvar alterações':'Criar Obra'}</button>
+</form>`;
+}
+
+function renderProjectDetailModal() {
+  const d = state.modalData || {};
+  const p = state.projects.find(pr=>pr.id===d.id)||d;
+  const tasks = state.tasks[p.id] || [];
+  const expenses = state.expenses[p.id] || [];
+  const cl = state.clients.find(c=>c.id===p.client_id);
+  const totalExpenses = expenses.reduce((s,e)=>s+(e.amount||0),0);
+  const statusColors = { PLANNING:'bg-slate-100 text-slate-600', IN_PROGRESS:'bg-blue-100 text-blue-600', PAUSED:'bg-yellow-100 text-yellow-600', COMPLETED:'bg-green-100 text-green-600', CANCELLED:'bg-red-100 text-red-600' };
+  const statusLabels = { PLANNING:'Planejamento', IN_PROGRESS:'Em Andamento', PAUSED:'Pausado', COMPLETED:'Concluído', CANCELLED:'Cancelado' };
+  return `
+${modalHeader(p.name||'Obra', p.code||'')}
+<div class="p-5 space-y-4">
+  <div class="grid grid-cols-2 gap-3 text-sm">
+    <div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400 mb-1">Status</div><span class="px-2 py-0.5 rounded-full text-xs ${statusColors[p.status]||'bg-slate-100'}">${statusLabels[p.status]||p.status}</span></div>
+    ${cl?`<div class="bg-slate-50 rounded-lg p-3"><div class="text-xs text-slate-400 mb-1">Cliente</div><div class="font-medium">${cl.name}</div></div>`:''}
+    ${p.budget_approved?`<div class="bg-green-50 rounded-lg p-3"><div class="text-xs text-slate-400 mb-1">Orçamento Aprovado</div><div class="font-bold text-green-700">${fmt(p.budget_approved)}</div></div>`:''}
+    <div class="bg-orange-50 rounded-lg p-3"><div class="text-xs text-slate-400 mb-1">Custo Real</div><div class="font-bold text-orange-700">${fmt(totalExpenses)}</div></div>
+  </div>
+
+  <div>
+    <div class="flex justify-between text-xs text-slate-500 mb-1"><span>Progresso Físico</span><span>${p.progress_pct||0}%</span></div>
+    <div class="bg-slate-100 rounded-full h-3">
+      <div class="h-3 rounded-full bg-[#1A3C6E] transition-all" style="width:${p.progress_pct||0}%"></div>
+    </div>
+  </div>
+
+  <!-- TASKS -->
+  <div>
+    <div class="flex items-center justify-between mb-2">
+      <h4 class="text-sm font-semibold text-slate-700">Etapas da Obra</h4>
+      <button onclick="addTaskRow('${p.id}')" class="text-xs bg-[#1A3C6E] text-white px-3 py-1 rounded-lg">+ Etapa</button>
+    </div>
+    <div class="space-y-2" id="tasks-list-${p.id}">
+      ${tasks.map(t=>`
+        <div class="flex items-center gap-3 bg-slate-50 rounded-lg p-3">
+          <select onchange="updateTaskStatus('${p.id}','${t.id}',this.value)" class="border border-slate-200 rounded text-xs px-2 py-1">
+            <option value="PENDING" ${t.status==='PENDING'?'selected':''}>Pendente</option>
+            <option value="IN_PROGRESS" ${t.status==='IN_PROGRESS'?'selected':''}>Em andamento</option>
+            <option value="DONE" ${t.status==='DONE'?'selected':''}>Concluída</option>
+          </select>
+          <span class="flex-1 text-sm text-slate-700">${t.name}</span>
+          <span class="text-xs text-slate-400">${t.progress_pct||0}%</span>
+        </div>`).join('')}
+      ${tasks.length===0?`<p class="text-slate-400 text-xs text-center py-4">Nenhuma etapa cadastrada</p>`:''}
+    </div>
+  </div>
+
+  <!-- EXPENSES -->
+  <div>
+    <div class="flex items-center justify-between mb-2">
+      <h4 class="text-sm font-semibold text-slate-700">Despesas da Obra</h4>
+      <button onclick="openAddExpenseForm('${p.id}')" class="text-xs bg-orange-600 text-white px-3 py-1 rounded-lg">+ Despesa</button>
+    </div>
+    <div id="expense-form-${p.id}" class="hidden mb-3">
+      <div class="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-2">
+        <input id="exp-desc-${p.id}" placeholder="Descrição *" class="w-full border border-slate-200 rounded px-2 py-1.5 text-xs"/>
+        <div class="grid grid-cols-2 gap-2">
+          <input id="exp-amt-${p.id}" type="number" placeholder="Valor R$" class="border border-slate-200 rounded px-2 py-1.5 text-xs" min="0" step="0.01"/>
+          <select id="exp-cat-${p.id}" class="border border-slate-200 rounded px-2 py-1.5 text-xs">
+            <option value="MATERIAL">Material</option><option value="LABOR">Mão de obra</option><option value="EQUIPMENT">Equipamento</option><option value="OTHER">Outro</option>
+          </select>
+        </div>
+        <button onclick="submitExpense('${p.id}')" class="w-full bg-orange-600 text-white py-1.5 rounded text-xs font-medium">Registrar Despesa</button>
+      </div>
+    </div>
+    <div class="space-y-1 max-h-40 overflow-y-auto">
+      ${expenses.map(e=>`
+        <div class="flex items-center gap-2 text-xs text-slate-600 py-1.5 border-b border-slate-100">
+          <span class="flex-1">${e.description}</span>
+          <span class="text-slate-400">${e.category}</span>
+          <span class="font-medium text-orange-700">${fmt(e.amount)}</span>
+          <span class="text-slate-300">${fmtDate(e.expense_date)}</span>
+        </div>`).join('')}
+      ${expenses.length===0?`<p class="text-slate-400 text-xs text-center py-3">Nenhuma despesa registrada</p>`:''}
+    </div>
+  </div>
+
+  <div class="flex gap-2 pt-2">
+    <button onclick="openModal('projectForm',${JSON.stringify(p).replace(/"/g,'&quot;')})" class="flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg text-sm hover:bg-slate-200 transition">Editar Obra</button>
+  </div>
+</div>`;
+}
+
+function renderConvertLeadModal() {
+  const d = state.modalData || {};
+  return `
+${modalHeader('Contrato Fechado! 🎉','Deseja criar um cliente a partir deste lead?')}
+<div class="p-5 space-y-4">
+  <div class="bg-green-50 border border-green-200 rounded-xl p-4 text-center">
+    <div class="text-3xl mb-2">🏆</div>
+    <div class="font-semibold text-slate-800">${d.name}</div>
+    <div class="text-sm text-slate-500">${d.work_type||''}</div>
+    ${d.budget_estimate?`<div class="text-green-700 font-bold mt-2">${fmt(d.budget_estimate)}</div>`:''}
+  </div>
+  <p class="text-sm text-slate-600">Ao criar o cliente, você poderá associar obras e contratos a ele no sistema.</p>
+  <div class="flex gap-3">
+    <button onclick="convertLeadToClient(${JSON.stringify(d).replace(/"/g,'&quot;')}).then(()=>{})" class="flex-1 bg-green-600 text-white py-2.5 rounded-lg font-medium hover:bg-green-700 transition">✓ Criar Cliente</button>
+    <button onclick="setState({modal:null})" class="px-4 py-2.5 rounded-lg border border-slate-200 text-slate-600 text-sm">Depois</button>
+  </div>
+</div>`;
+}
+
+function renderToast() {
+  const t = state.toast;
+  const colors = { success:'bg-green-600', error:'bg-red-600', info:'bg-blue-600' };
+  return `<div class="${colors[t.type]||colors.info} text-white px-4 py-3 rounded-xl shadow-lg text-sm flex items-center gap-2 fade-in">
+    <span>${t.type==='success'?'✓':t.type==='error'?'✕':'ℹ'}</span>${t.msg}
+  </div>`;
+}
+
+// ─── EVENTS ──────────────────────────────────
+function attachEvents() {
+  // (event handlers are inline via onclick)
+}
+
+// ─── GLOBAL HANDLERS ─────────────────────────
+window.navigate = (v) => setState({ view: v, modal: null });
+window.openModal = (name, data) => {
+  if (name === 'leadDetail' && typeof data === 'string') data = data;
+  openModal(name, data);
+};
+window.openModalProject = (id) => {
+  const p = state.projects.find(pr=>pr.id===id);
+  openModal('projectDetail', p);
+};
+window.setState = setState;
+window.deleteLead = deleteLead;
+window.updateLeadStatus = updateLeadStatus;
+window.completeVisit = completeVisit;
+window.convertLeadToClient = convertLeadToClient;
+window.deleteQuoteItem = deleteQuoteItem;
+
+window.switchAuth = (mode) => setState({ authMode: mode });
+
+window.handleAuth = async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  if (state.authMode === 'signup') {
+    await signUp(fd.get('email'), fd.get('password'), fd.get('name'));
+  } else {
+    await signIn(fd.get('email'), fd.get('password'));
+  }
+};
+
+window.handleSignOut = signOut;
+
+window.handleLeadForm = async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  await saveLead(Object.fromEntries(fd));
+};
+
+window.handleVisitForm = async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  await saveVisit(Object.fromEntries(fd));
+};
+
+window.handleQuoteForm = async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  await saveQuote(Object.fromEntries(fd));
+};
+
+window.handleProjectForm = async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  await saveProject(Object.fromEntries(fd));
+};
+
+window.handleDragStart = (e, leadId) => {
+  e.dataTransfer.setData('leadId', leadId);
+};
+
+window.handleDrop = async (e, newStatus) => {
+  e.preventDefault();
+  const leadId = e.dataTransfer.getData('leadId');
+  if (leadId) await updateLeadStatus(leadId, newStatus);
+};
+
+window.addQuoteItemRow = async (quoteId) => {
+  await saveQuoteItem(quoteId, { description:'Novo item', category:'MATERIAL', unit:'un', quantity:1, unit_price:0 });
+};
+
+window.updateQuoteItemField = async (quoteId, itemId, field, value) => {
+  const items = state.quoteItems[quoteId] || [];
+  const item = items.find(i=>i.id===itemId);
+  if (!item) return;
+  const updated = { ...item, [field]: value };
+  await db.from('quote_items').update({ [field]: value }).eq('id', itemId);
+  setState({ quoteItems: { ...state.quoteItems, [quoteId]: items.map(i=>i.id===itemId?updated:i) } });
+};
+
+window.markQuoteSent = async (quoteId) => {
+  await db.from('quotes').update({ status:'SENT' }).eq('id', quoteId);
+  setState({ quotes: state.quotes.map(q=>q.id===quoteId?{...q,status:'SENT'}:q) });
+  showToast('Orçamento marcado como enviado');
+};
+
+window.markQuoteApproved = async (quoteId) => {
+  await db.from('quotes').update({ status:'APPROVED' }).eq('id', quoteId);
+  setState({ quotes: state.quotes.map(q=>q.id===quoteId?{...q,status:'APPROVED'}:q) });
+  showToast('Orçamento aprovado!');
+};
+
+window.addTaskRow = async (projectId) => {
+  const name = prompt('Nome da etapa:');
+  if (!name) return;
+  await saveTask(projectId, { name, status:'PENDING', progress_pct:0 });
+  const p = state.projects.find(pr=>pr.id===projectId);
+  openModal('projectDetail', p);
+};
+
+window.updateTaskStatus = async (projectId, taskId, status) => {
+  await db.from('project_tasks').update({ status, progress_pct: status==='DONE'?100:status==='IN_PROGRESS'?50:0 }).eq('id', taskId);
+  await loadProjectTasks(projectId);
+  const p = state.projects.find(pr=>pr.id===projectId);
+  openModal('projectDetail', p);
+};
+
+window.openAddExpenseForm = (projectId) => {
+  const el = document.getElementById(`expense-form-${projectId}`);
+  if (el) el.classList.toggle('hidden');
+};
+
+window.submitExpense = async (projectId) => {
+  const desc = document.getElementById(`exp-desc-${projectId}`)?.value;
+  const amt = parseFloat(document.getElementById(`exp-amt-${projectId}`)?.value);
+  const cat = document.getElementById(`exp-cat-${projectId}`)?.value;
+  if (!desc || !amt) { showToast('Preencha descrição e valor', 'error'); return; }
+  await saveExpense(projectId, { description:desc, amount:amt, category:cat, expense_date:new Date().toISOString().split('T')[0] });
+  const p = state.projects.find(pr=>pr.id===projectId);
+  openModal('projectDetail', p);
+};
+
+// ─── INIT ────────────────────────────────────
+async function init() {
+  const { data: { session } } = await db.auth.getSession();
+  if (session?.user) {
+    await afterLogin(session.user);
+  } else {
+    render();
+  }
+
+  db.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' && session?.user) {
+      await afterLogin(session.user);
+    } else if (event === 'SIGNED_OUT') {
+      setState({ user: null, profile: null });
+    }
+  });
+}
+
+init();
+</script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>CRM Obras · Dos Anjos Engenharia</title>
+<script src="https://cdn.tailwindcss.com/3.4.1"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f1f5f9; }
+  .kanban-col { min-height: 300px; }
+  .card-drag { cursor: grab; }
+  .card-drag:active { cursor: grabbing; }
+  .sidebar-item { transition: all .15s; }
+  .sidebar-item:hover { background: rgba(255,255,255,.12); }
+  .sidebar-item.active { background: rgba(255,255,255,.2); border-left: 3px solid #fff; }
+  .fade-in { animation: fadeIn .2s ease; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+  .modal-bg { background: rgba(0,0,0,.5); backdrop-filter: blur(2px); }
+  ::-webkit-scrollbar { width:5px; height:5px; }
+  ::-webkit-scrollbar-track { background: #f1f5f9; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius:3px; }
+  input, select, textarea { outline: none; }
+  input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 2px #3b82f6; }
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script type="module">
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+const SUPABASE_URL = 'https://rvwvpuyisahqsvpgtygp.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ2d3ZwdXlpc2FocXN2cGd0eWdwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcyMDQzMzUsImV4cCI6MjA4Mjc4MDMzNX0.IZk5mH-kQ5dU02gh_aqj3wUqaXlVhL1CTP8fOF8mH8A';
+
+const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ─── STATE ────────────────────────────────────
+let state = {
+  user: null, profile: null,
+  view: 'dashboard',
+  leads: [], clients: [], visits: [], quotes: [], quoteItems: {}, projects: [], tasks: {}, expenses: {},
+  modal: null, modalData: null,
+  loading: false, toast: null,
+  dragLeadId: null
+};
+
+function setState(patch) {
+  Object.assign(state, patch);
+  render();
+}
+
+// ─── TOAST ───────────────────────────────────
+function showToast(msg, type='success') {
+  setState({ toast: { msg, type } });
+  setTimeout(() => setState({ toast: null }), 3500);
+}
+
+// ─── API ─────────────────────────────────────
+async function loadAll() {
+  const [leads, clients, visits, quotes, projects] = await Promise.all([
+    db.from('leads').select('*').order('created_at', { ascending: false }),
+    db.from('clients').select('*').order('created_at', { ascending: false }),
+    db.from('visits').select('*').order('scheduled_at'),
+    db.from('quotes').select('*').order('created_at', { ascending: false }),
+    db.from('projects').select('*').order('created_at', { ascending: false }),
+  ]);
+  setState({
+    leads: leads.data || [],
+    clients: clients.data || [],
+    visits: visits.data || [],
+    quotes: quotes.data || [],
+    projects: projects.data || [],
+  });
+}
+
+async function loadQuoteItems(quoteId) {
+  const { data } = await db.from('quote_items').select('*').eq('quote_id', quoteId).order('sort_order');
+  setState({ quoteItems: { ...state.quoteItems, [quoteId]: data || [] } });
+}
+
+async function loadProjectTasks(projectId) {
+  const { data } = await db.from('project_tasks').select('*').eq('project_id', projectId).order('sort_order');
+  setState({ tasks: { ...state.tasks, [projectId]: data || [] } });
+}
+
+async function loadProjectExpenses(projectId) {
+  const { data } = await db.from('expenses').select('*').eq('project_id', projectId).order('expense_date', {ascending:false});
+  setState({ expenses: { ...state.expenses, [projectId]: data || [] } });
+}
+
+// ─── AUTH ────────────────────────────────────
+async function signIn(email, password) {
+  const { data, error } = await db.auth.signInWithPassword({ email, password });
+  if (error) { showToast(error.message, 'error'); return; }
+  await afterLogin(data.user);
+}
+
+async function signUp(email, password, name) {
+  const { data, error } = await db.auth.signUp({ email, password, options: { data: { name } } });
+  if (error) { showToast(error.message, 'error'); return; }
+  if (data.user) { showToast('Cadastro realizado! Verifique seu email.'); }
+}
+
+async function signOut() {
+  await db.auth.signOut();
+  setState({ user: null, profile: null, view: 'dashboard', leads: [], clients: [], visits: [], quotes: [], projects: [] });
+}
+
+async function afterLogin(user) {
+  const { data: profile } = await db.from('profiles').select('*').eq('id', user.id).single();
+  setState({ user, profile });
+  await loadAll();
+}
+
+// ─── LEAD ACTIONS ────────────────────────────
+const LEAD_STAGES = [
+  { key:'NEW', label:'Novo Lead', color:'bg-slate-100 text-slate-700', dot:'bg-slate-400' },
+  { key:'CONTACTED', label:'Contato Feito', color:'bg-blue-100 text-blue-700', dot:'bg-blue-400' },
+  { key:'VISIT_SCHEDULED', label:'Visita Agendada', color:'bg-yellow-100 text-yellow-700', dot:'bg-yellow-400' },
+  { key:'VISIT_DONE', label:'Visita Realizada', color:'bg-orange-100 text-orange-700', dot:'bg-orange-400' },
+  { key:'QUOTE_SENT', label:'Orçamento Enviado', color:'bg-purple-100 text-purple-700', dot:'bg-purple-400' },
+  { key:'NEGOTIATING', label:'Negociação', color:'bg-pink-100 text-pink-700', dot:'bg-pink-400' },
+  { key:'CONTRACT_SIGNED', label:'Contrato Fechado', color:'bg-green-100 text-green-700', dot:'bg-green-400' },
+  { key:'LOST', label:'Perdido', color:'bg-red-100 text-red-700', dot:'bg-red-400' },
+];
+
+const SOURCE_LABELS = { WHATSAPP:'WhatsApp', PHONE:'Telefone', EMAIL:'E-mail', INSTAGRAM:'Instagram', REFERRAL:'Indicação', WEBSITE:'Site', OTHER:'Outro' };
+
+async function saveLead(formData) {
+  const isEdit = !!formData.id;
+  const payload = { name:formData.name, phone:formData.phone, email:formData.email,
+    property_address:formData.property_address, work_type:formData.work_type,
+    source:formData.source, status:formData.status||'NEW', budget_estimate:formData.budget_estimate||null,
+    notes:formData.notes, user_id: state.user.id };
+  if (isEdit) {
+    await db.from('leads').update(payload).eq('id', formData.id);
+    showToast('Lead atualizado');
+  } else {
+    await db.from('leads').insert(payload);
+    showToast('Lead criado');
+  }
+  await loadAll();
+  setState({ modal: null });
+}
+
+async function updateLeadStatus(leadId, newStatus) {
+  await db.from('leads').update({ status: newStatus }).eq('id', leadId);
+  setState({ leads: state.leads.map(l => l.id === leadId ? { ...l, status: newStatus } : l) });
+  // If closing deal, prompt to create client
+  if (newStatus === 'CONTRACT_SIGNED') {
+    const lead = state.leads.find(l => l.id === leadId);
+    if (lead) openModal('convertLead', lead);
+  }
+}
+
+async function deleteLead(id) {
+  if (!confirm('Excluir este lead?')) return;
+  await db.from('leads').delete().eq('id', id);
+  setState({ leads: state.leads.filter(l => l.id !== id), modal: null });
+  showToast('Lead excluído');
+}
+
+// ─── VISIT ACTIONS ────────────────────────────
+async function saveVisit(formData) {
+  const isEdit = !!formData.id;
+  const payload = { lead_id:formData.lead_id, scheduled_at:formData.scheduled_at,
+    observations:formData.observations, status:formData.status||'SCHEDULED', engineer_id:state.user.id };
+  if (isEdit) {
+    await db.from('visits').update(payload).eq('id', formData.id);
+    showToast('Visita atualizada');
+  } else {
+    await db.from('visits').insert(payload);
+    // Update lead status
+    await db.from('leads').update({ status:'VISIT_SCHEDULED' }).eq('id', formData.lead_id);
+    showToast('Visita agendada');
+  }
+  await loadAll();
+  setState({ modal: null });
+}
+
+async function completeVisit(id) {
+  await db.from('visits').update({ status:'DONE', completed_at: new Date().toISOString() }).eq('id', id);
+  const v = state.visits.find(v => v.id === id);
+  if (v) await db.from('leads').update({ status:'VISIT_DONE' }).eq('id', v.lead_id);
+  await loadAll();
+  showToast('Visita concluída');
+}
+
+// ─── QUOTE ACTIONS ────────────────────────────
+async function saveQuote(formData) {
+  const isEdit = !!formData.id;
+  const payload = { lead_id:formData.lead_id, title:formData.title, status:'DRAFT',
+    valid_until:formData.valid_until, overhead_pct:parseFloat(formData.overhead_pct)||15,
+    profit_margin:parseFloat(formData.profit_margin)||20, notes:formData.notes, created_by:state.user.id,
+    number: formData.number || `ORC-${new Date().getFullYear()}-${String(state.quotes.length+1).padStart(4,'0')}` };
+  let quoteId = formData.id;
+  if (isEdit) {
+    await db.from('quotes').update(payload).eq('id', formData.id);
+    showToast('Orçamento atualizado');
+  } else {
+    const { data } = await db.from('quotes').insert(payload).select().single();
+    quoteId = data.id;
+    showToast('Orçamento criado');
+  }
+  await loadAll();
+  await loadQuoteItems(quoteId);
+  setState({ modal: 'quoteEditor', modalData: { ...formData, id: quoteId } });
+}
+
+async function saveQuoteItem(quoteId, item) {
+  if (item.id) {
+    await db.from('quote_items').update(item).eq('id', item.id);
+  } else {
+    await db.from('quote_items').insert({ ...item, quote_id: quoteId });
+  }
+  await loadQuoteItems(quoteId);
+}
+
+async function deleteQuoteItem(quoteId, itemId) {
+  await db.from('quote_items').delete().eq('id', itemId);
+  await loadQuoteItems(quoteId);
+}
+
+function calcQuoteTotals(quoteId) {
+  const items = state.quoteItems[quoteId] || [];
+  const materials = items.filter(i=>i.category==='MATERIAL').reduce((s,i)=>s+i.quantity*i.unit_price,0);
+  const labor = items.filter(i=>i.category!=='MATERIAL').reduce((s,i)=>s+i.quantity*i.unit_price,0);
+  const subtotal = materials + labor;
+  const q = state.quotes.find(q=>q.id===quoteId);
+  if (!q) return { materials, labor, subtotal, total:subtotal };
+  const total = subtotal * (1 + (q.overhead_pct||0)/100 + (q.profit_margin||0)/100);
+  return { materials, labor, subtotal, total };
+}
+
+// ─── PROJECT ACTIONS ─────────────────────────
+async function saveProject(formData) {
+  const isEdit = !!formData.id;
+  const payload = { name:formData.name, code:formData.code||`OBR-${new Date().getFullYear()}-${String(state.projects.length+1).padStart(4,'0')}`,
+    status:formData.status||'PLANNING', address:formData.address,
+    start_date:formData.start_date||null, end_date_planned:formData.end_date_planned||null,
+    budget_approved:parseFloat(formData.budget_approved)||null,
+    progress_pct:parseFloat(formData.progress_pct)||0,
+    notes:formData.notes, engineer_id:state.user.id,
+    client_id:formData.client_id||null };
+  if (isEdit) {
+    await db.from('projects').update(payload).eq('id', formData.id);
+    showToast('Obra atualizada');
+  } else {
+    await db.from('projects').insert(payload);
+    showToast('Obra criada');
+  }
+  await loadAll();
+  setState({ modal: null });
+}
+
+async function saveTask(projectId, task) {
+  if (task.id) {
+    await db.from('project_tasks').update(task).eq('id', task.id);
+  } else {
+    await db.from('project_tasks').insert({ ...task, project_id: projectId, sort_order: (state.tasks[projectId]||[]).length });
+  }
+  await loadProjectTasks(projectId);
+}
+
+async function saveExpense(projectId, expense) {
+  await db.from('expenses').insert({ ...expense, project_id: projectId, recorded_by: state.user.id });
+  await loadProjectExpenses(projectId);
+  showToast('Despesa registrada');
+}
+
 // ─── CLIENT ACTIONS ────────────────────────��
 esync function convertLeadToClient(lead) {
   const { data } = await db.from('clients').insert({
